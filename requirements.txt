@@ -1,0 +1,10 @@
+streamlit
+python-dotenv
+requests
+langchain
+langchain-openai
+crewai
+langgraph
+langfuse
+httpx
+typing-extensions
