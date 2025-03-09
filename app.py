@@ -1,262 +1,257 @@
 import streamlit as st
 import os
-import time
-import traceback
 from dotenv import load_dotenv
 from typing import Dict, Any
-
-from generators.agent_generator import AgentGenerator, generate_agents
-
-from framework import create_code_block, render_framework_overview
-from utils.prompts import get_framework_description, get_example_prompts
-from utils.openrouter import get_openrouter_models
 
 # Load environment variables
 load_dotenv()
 
+from framework.crewai_generator import create_crewai_code, render_crewai_overview
+from framework.tool_utils import (
+    get_available_tools,
+    get_tool_description,
+    get_tool_env_requirements,
+)
+from generators.prompt_builder import prompt_builder
+
+st.set_page_config(page_title="CrewAI Generator", page_icon="🤖", layout="wide")
+
 
 def main():
-    # Set up page configuration only once
-    if "page_config_done" not in st.session_state:
-        st.set_page_config(
-            page_title="Agent Framework Generator", page_icon="🚀", layout="wide"
+    st.title("🤖 CrewAI Generator")
+
+    # Initialize session state for configuration
+    if "config" not in st.session_state:
+        st.session_state.config = {"agents": [], "tasks": []}
+
+    # Initialize navigation state
+    if "navigation" not in st.session_state:
+        st.session_state.navigation = None
+
+    # Sidebar info
+    with st.sidebar:
+        st.write("### CrewAI Generator")
+        st.write(
+            "Bu uygulama, CrewAI framework'ü için ekip ve görev yapılandırması oluşturmanıza yardımcı olur."
         )
-        st.session_state.page_config_done = True
 
-    # Initialize session state variables if not already set
-    if "available_models" not in st.session_state:
-        st.session_state.available_models = []
-        st.session_state.model_options = []
-        st.session_state.selected_model_id = (
-            "deepseek/deepseek-r1:free"  # Default model
-        )
-        st.session_state.api_key_provided = False
-        st.session_state.error_logs = []
+        # API Key girişi
+        with st.expander("API Ayarları", expanded=False):
+            openai_key = st.text_input("OpenAI API Key", type="password")
+            if openai_key:
+                os.environ["OPENAI_API_KEY"] = openai_key
 
-    st.title("Multi-Framework Agent Generator")
-    st.write("Generate agent code for different frameworks based on your requirements!")
+            openrouter_key = st.text_input("OpenRouter API Key", type="password")
+            if openrouter_key:
+                os.environ["OPENROUTER_API_KEY"] = openrouter_key
 
-    # Display OpenRouter information
-    st.sidebar.title("🌐 OpenRouter")
-    st.sidebar.info("Powered by OpenRouter AI models")
+    # Navigation
+    tabs = ["Prompt Builder", "Agent Builder", "Task Builder", "Preview & Code"]
 
-    # Check for API key first
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        api_key = st.sidebar.text_input("OpenRouter API Key:", type="password")
-        if api_key:
-            os.environ["OPENROUTER_API_KEY"] = api_key
-            st.session_state.api_key_provided = True
-            # Don't rerun page, we'll use the key in subsequent operations
+    # Use the stored navigation if set
+    if st.session_state.navigation:
+        selected_tab = st.session_state.navigation
+        # Reset navigation state
+        st.session_state.navigation = None
     else:
-        st.session_state.api_key_provided = True
+        selected_tab = st.sidebar.radio("Navigation", tabs)
 
-    # Only try to fetch models if we have an API key and haven't already fetched them
-    if st.session_state.api_key_provided and not st.session_state.available_models:
-        try:
-            st.sidebar.text("Loading available models...")
-            progress_placeholder = st.sidebar.empty()
-            is_free_only = st.sidebar.checkbox(
-                "Only show free models", value=True, key="isFree"
-            )
-            try:
-                all_models = get_openrouter_models(free_only=is_free_only)
-                if all_models:
-                    st.session_state.available_models = all_models
+    if selected_tab == "Prompt Builder":
+        prompt_builder()
+    elif selected_tab == "Agent Builder":
+        agent_builder()
+    elif selected_tab == "Task Builder":
+        task_builder()
+    elif selected_tab == "Preview & Code":
+        preview_and_code()
 
-                    # Create model options
-                    model_options = []
-                    for model in all_models:
-                        label = f"{model['name']} by {model['author']}"
-                        model_options.append((model["model_id"], label))
 
-                    st.session_state.model_options = model_options
-                else:
-                    st.sidebar.warning("Could not fetch models. Using default model.")
-                    st.session_state.available_models = [
-                        {
-                            "name": "Llama-3 70B",
-                            "model_id": "meta-llama/llama-3-3-70b-instruct",
-                        }
-                    ]
-            finally:
-                progress_placeholder.empty()
-        except Exception as e:
-            error_msg = f"Error fetching models: {e}"
-            st.session_state.error_logs.append(error_msg)
-            st.sidebar.error(error_msg)
-            st.session_state.available_models = [
-                {"name": "Llama-3 70B", "model_id": "meta-llama/llama-3-3-70b-instruct"}
-            ]
+def agent_builder():
+    st.header("Agent Builder")
 
-    # Model selection
-    st.sidebar.subheader("🤖 Choose AI Model")
+    # Form for creating a new agent
+    with st.form("agent_form"):
+        st.subheader("Create a New Agent")
+        name = st.text_input("Agent Identifier (no spaces)")
+        role = st.text_input("Role")
+        goal = st.text_area("Goal")
+        backstory = st.text_area("Backstory")
 
-    # Only show model selection if we have models
-    if st.session_state.model_options:
-        selected_model_id = st.sidebar.selectbox(
-            "Select model:",
-            options=[model_id for model_id, _ in st.session_state.model_options],
-            format_func=lambda x: next(
-                (
-                    label
-                    for model_id, label in st.session_state.model_options
-                    if model_id == x
-                ),
-                x,
-            ),
-            index=next(
-                (
-                    i
-                    for i, (model_id, _) in enumerate(st.session_state.model_options)
-                    if model_id == "deepseek/deepseek-r1:free"
-                ),
-                0,
-            ),
-            key="model_selection",
-        )
-        st.session_state.selected_model_id = selected_model_id
-    else:
-        st.sidebar.info("Default model: DeepSeek: R1 (free) by DEEPSEEK")
-        st.session_state.selected_model_id = "deepseek/deepseek-r1:free"
+        col1, col2 = st.columns(2)
+        with col1:
+            verbose = st.checkbox("Verbose", value=True)
+        with col2:
+            allow_delegation = st.checkbox("Allow Delegation", value=False)
 
-    # Framework selection
-    st.sidebar.title("🔄 Framework Selection")
-    framework = st.sidebar.radio(
-        "Choose a framework:",
-        ["crewai", "langgraph"],
-        format_func=lambda x: {"crewai": "CrewAI", "langgraph": "LangGraph"}[x],
-    )
+        # Tool selection
+        st.subheader("Select Tools")
+        available_tools = get_available_tools()
+        selected_tools = []
 
-    # Framework description
-    st.sidebar.markdown(get_framework_description(framework))
+        # Display tools in columns
+        cols = st.columns(2)
+        for i, (tool_name, tool_info) in enumerate(available_tools.items()):
+            col_index = i % 2
+            with cols[col_index]:
+                if st.checkbox(f"{tool_name}", help=tool_info["description"]):
+                    selected_tools.append(tool_name)
+                    # If tool requires environment variables, show a note
+                    if tool_info.get("requires_env", False):
+                        st.info(
+                            f"Note: {tool_name} requires the environment variable: {tool_info.get('env_var')}"
+                        )
 
-    # Sidebar for examples
-    st.sidebar.title("📚 Example Prompts")
-    example_prompts = get_example_prompts()
-    selected_example = st.sidebar.selectbox(
-        "Choose an example:", list(example_prompts.keys()), key="example_selection"
-    )
-
-    # Main input area
-    col1, col2 = st.columns([2, 1])
-
-    with col1:
-        st.subheader("🎯 Define Your Requirements")
-        user_prompt = st.text_area(
-            "Describe what you need:",
-            value=example_prompts[selected_example],
-            height=100,
-            key="user_prompt",
-        )
-
-        generate_button = st.button(
-            f"🚀 Generate {framework.upper()} Code", key="generate_button"
-        )
-        if generate_button:
-            if not st.session_state.api_key_provided:
-                st.error("Please set your OpenRouter API Key in the sidebar")
+        submitted = st.form_submit_button("Add Agent")
+        if submitted:
+            if not name or not role or not goal:
+                st.error("Agent identifier, role, and goal are required!")
             else:
-                try:
-                    with st.spinner(f"Generating your {framework} code..."):
-                        # Get model name for display
-                        model_name = "selected model"
-                        for model in st.session_state.available_models:
-                            if model["model_id"] == st.session_state.selected_model_id:
-                                model_name = model["name"]
-                                break
+                agent = {
+                    "name": name,
+                    "role": role,
+                    "goal": goal,
+                    "backstory": backstory,
+                    "verbose": verbose,
+                    "allow_delegation": allow_delegation,
+                    "tools": selected_tools,
+                }
 
-                        st.info(f"Using {model_name} to generate your code...")
+                st.session_state.config["agents"].append(agent)
+                st.success(f"Agent '{name}' added successfully!")
 
-                        config = generate_agents(
-                            user_prompt, framework, st.session_state.selected_model_id
-                        )
+                # Show environment variable requirements if any
+                env_requirements = get_tool_env_requirements(selected_tools)
+                if env_requirements:
+                    st.warning("⚠️ Some selected tools require environment variables:")
+                    for req in env_requirements:
+                        st.code(f"{req['env_var']}=your_value_here")
 
-                        # Store the configuration in session state
-                        st.session_state.config = config
-                        st.session_state.code = create_code_block(config, framework)
-                        st.session_state.framework = framework
+    # Display existing agents
+    if st.session_state.config["agents"]:
+        st.header("Existing Agents")
+        for i, agent in enumerate(st.session_state.config["agents"]):
+            with st.expander(f"🤖 {agent['role']}", expanded=False):
+                st.write(f"**Goal:** {agent['goal']}")
+                st.write(f"**Backstory:** {agent['backstory']}")
 
-                        time.sleep(0.5)  # Small delay for better UX
-                        st.success(
-                            f"✨ {framework.upper()} code generated successfully!"
-                        )
-                except Exception as e:
-                    error_msg = f"Error generating code: {e}\n{traceback.format_exc()}"
-                    st.session_state.error_logs.append(error_msg)
-                    st.error(f"Error generating code: {e}")
-                    # Display more detailed error in an expander
-                    with st.expander("View Error Details"):
-                        st.code(traceback.format_exc())
-
-    with col2:
-        st.subheader("💡 Framework Tips")
-        if framework == "crewai":
-            st.info(
-                """
-            **CrewAI Tips:**
-            - Define clear roles for each agent
-            - Set specific goals for better performance
-            - Consider how agents should collaborate
-            - Specify task delegation permissions
-            """
-            )
-        elif framework == "langgraph":
-            st.info(
-                """
-            **LangGraph Tips:**
-            - Design your graph flow carefully
-            - Define clear node responsibilities
-            - Consider conditional routing between nodes
-            - Think about how state is passed between nodes
-            """
-            )
-
-    # Display results only if we have them
-    if "config" in st.session_state and "code" in st.session_state:
-        st.subheader("🔍 Generated Configuration")
-
-        tab1, tab2, tab3 = st.tabs(["📊 Visual Overview", "💻 Code", "🐞 Debug"])
-
-        # Tabs for different views
-        with tab1:
-            current_framework = st.session_state.framework
-            render_framework_overview(st.session_state.config, current_framework)
-
-        with tab2:
-            st.code(st.session_state.code, language="python")
-
-            col1, col2 = st.columns([1, 5])
-            with col1:
-                if st.button("📋 Copy Code", key="copy_button"):
-                    st.toast("Code copied to clipboard! 📋")
-
-        with tab3:
-            st.subheader("Debug Information")
-            st.write(
-                "This section shows debugging information that can help troubleshoot issues."
-            )
-
-            with st.expander("Session State Variables"):
-                st.json(
-                    {
-                        k: v
-                        for k, v in st.session_state.items()
-                        if k not in ["config", "code", "error_logs"]
-                    }
-                )
-
-            with st.expander("Error Logs"):
-                if st.session_state.error_logs:
-                    for i, error in enumerate(st.session_state.error_logs):
-                        st.text(f"Error {i+1}:\n{error}")
+                if "tools" in agent and agent["tools"]:
+                    st.write(f"**Tools:** {', '.join(agent['tools'])}")
                 else:
-                    st.write("No errors logged.")
+                    st.write("**Tools:** None")
 
-            if st.button("Clear Session State", key="clear_session"):
-                for key in list(st.session_state.keys()):
-                    del st.session_state[key]
-                st.success("Session state cleared! Please refresh the page.")
+                if st.button(f"Delete Agent", key=f"delete_agent_{i}"):
+                    st.session_state.config["agents"].pop(i)
+                    # Also remove tasks associated with this agent
+                    st.session_state.config["tasks"] = [
+                        task
+                        for task in st.session_state.config["tasks"]
+                        if task["agent"] != agent["name"]
+                    ]
+                    st.rerun()
+
+
+def task_builder():
+    st.header("Task Builder")
+
+    # Check if agents exist
+    if not st.session_state.config["agents"]:
+        st.warning("Please create at least one agent before creating tasks.")
+        return
+
+    # Form for creating a new task
+    with st.form("task_form"):
+        st.subheader("Create a New Task")
+        name = st.text_input("Task Identifier (no spaces)")
+        description = st.text_area("Description")
+        expected_output = st.text_area("Expected Output")
+
+        # Agent selection
+        agent_options = [agent["name"] for agent in st.session_state.config["agents"]]
+        agent = st.selectbox("Assign to Agent", agent_options)
+
+        submitted = st.form_submit_button("Add Task")
+        if submitted:
+            if not name or not description:
+                st.error("Task identifier and description are required!")
+            else:
+                task = {
+                    "name": name,
+                    "description": description,
+                    "expected_output": expected_output,
+                    "agent": agent,
+                }
+
+                st.session_state.config["tasks"].append(task)
+                st.success(f"Task '{name}' added successfully!")
+
+    # Display existing tasks
+    if st.session_state.config["tasks"]:
+        st.header("Existing Tasks")
+        for i, task in enumerate(st.session_state.config["tasks"]):
+            with st.expander(f"📋 {task['name']}", expanded=False):
+                st.write(f"**Description:** {task['description']}")
+                st.write(f"**Expected Output:** {task['expected_output']}")
+                st.write(f"**Assigned to:** {task['agent']}")
+
+                if st.button(f"Delete Task", key=f"delete_task_{i}"):
+                    st.session_state.config["tasks"].pop(i)
+                    st.rerun()
+
+
+def preview_and_code():
+    st.header("Preview & Generated Code")
+
+    # Check if configuration is complete
+    if not st.session_state.config["agents"]:
+        st.warning("Please create at least one agent.")
+        return
+
+    if not st.session_state.config["tasks"]:
+        st.warning("Please create at least one task.")
+        return
+
+    # Check for environment variable requirements
+    all_tools = []
+    for agent in st.session_state.config["agents"]:
+        if "tools" in agent and agent["tools"]:
+            all_tools.extend(agent["tools"])
+
+    env_requirements = get_tool_env_requirements(all_tools)
+    if env_requirements:
+        st.warning("⚠️ Your configuration requires the following environment variables:")
+        env_code = "# Add these to your .env file:\n"
+        for req in env_requirements:
+            env_code += f"{req['env_var']}=your_value_here\n"
+        st.code(env_code)
+
+    # Show configuration overview
+    render_crewai_overview(st.session_state.config)
+
+    # Generate and display code
+    st.header("Generated CrewAI Code")
+    generated_code = create_crewai_code(st.session_state.config)
+    st.code(generated_code, language="python")
+
+    # Download button for the generated code
+    st.download_button(
+        label="Download Python Code",
+        data=generated_code,
+        file_name="crew_ai_script.py",
+        mime="text/plain",
+    )
+
+    # Also provide .env template if needed
+    if env_requirements:
+        env_template = "# Environment variables for CrewAI\n"
+        for req in env_requirements:
+            env_template += f"{req['env_var']}=your_value_here\n"
+
+        st.download_button(
+            label="Download .env Template",
+            data=env_template,
+            file_name=".env.template",
+            mime="text/plain",
+        )
 
 
 if __name__ == "__main__":

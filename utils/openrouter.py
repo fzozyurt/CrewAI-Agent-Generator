@@ -8,6 +8,7 @@ import requests
 from typing import List, Dict, Optional
 
 
+@st.cache_data(ttl=3600)
 def get_openrouter_models(free_only: bool = False) -> List[Dict]:
     """
     Fetches model data from OpenRouter API and returns a filtered list of models.
